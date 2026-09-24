@@ -11,25 +11,24 @@ $jsPath = '../assets/js/main.js';
 $db = getDB();
 
 // 筛选参数
-$status = $_GET['status'] ?? '';
-$type = $_GET['type'] ?? '';
+$status = ($s = ($_GET['status'] ?? '')) !== '' && in_array($s, ['0', '1', '2'], true) ? $s : '';
+$type = ($t = ($_GET['type'] ?? '')) && in_array($t, ['help', 'suggest', 'lost'], true) ? $t : '';
 $keyword = trim($_GET['keyword'] ?? '');
 $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 15;
-$offset = ($page - 1) * $pageSize;
 
 $where = "WHERE 1=1";
 $params = [];
 
-if ($status !== '' && in_array($status, ['0', '1', '2'])) {
+if ($status !== '') {
     $where .= " AND status = ?";
     $params[] = intval($status);
 }
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND type = ?";
     $params[] = $type;
 }
-if ($keyword) {
+if ($keyword !== '') {
     $where .= " AND (title LIKE ? OR content LIKE ? OR nickname LIKE ?)";
     $kw = "%$keyword%";
     $params[] = $kw;
@@ -39,8 +38,16 @@ if ($keyword) {
 
 $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
+
+// 页码越界：重定向到有效页并保留筛选条件
+$listParams = array_filter(['status' => $status, 'type' => $type, 'keyword' => $keyword], function ($v) {
+    return $v !== '' && $v !== null;
+});
+clampPageRedirect($page, $totalPages, $listParams, 'index.php');
+$page = min($page, max(1, $totalPages));
+$offset = ($page - 1) * $pageSize;
 
 $sql = "SELECT * FROM messages $where ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset";
 $stmt = $db->prepare($sql);

@@ -78,6 +78,54 @@ function cleanInput($str) {
 }
 
 /**
+ * 根据筛选条件生成分页/列表链接的查询串（仅保留白名单参数）
+ */
+function buildListQuery(array $params, array $overrides = []) {
+    $query = array_merge($params, $overrides);
+    return $query ? '?' . http_build_query($query) : '';
+}
+
+/**
+ * 页码越界时重定向到有效页：
+ * 小于1视为1，大于最大页则回到最后一页；无数据时回到第1页。
+ * 重定向时完整保留当前筛选条件。
+ */
+function clampPageRedirect($page, $totalPages, array $params, $script) {
+    if ($totalPages > 0 && $page > $totalPages) {
+        $location = $script . buildListQuery($params, ['page' => $totalPages]);
+        header('Location: ' . $location, true, 302);
+        exit;
+    }
+}
+
+/**
+ * 列表页 -> 详情页时编码返回地址，详情页"返回列表"据此恢复筛选条件
+ */
+function buildDetailBackUrl($id, array $listParams, $script = 'index.php') {
+    return 'detail.php?id=' . intval($id) . '&back=' . urlencode($script . buildListQuery($listParams));
+}
+
+/**
+ * 解析详情页的返回地址，只允许站内相对路径（防止开放重定向）
+ */
+function resolveDetailBackUrl($default = 'index.php') {
+    $back = $_GET['back'] ?? '';
+    if ($back === '' || strpos($back, '//') === 0 || strpos($back, '\\') === 0) {
+        return $default;
+    }
+    $path = parse_url($back, PHP_URL_PATH);
+    if ($path === false || $path === null || $path === '' || $path[0] === '/') {
+        return $default;
+    }
+    // 只允许跳回站内已知的列表页
+    $allowed = ['index.php', 'favorites.php', 'admin/index.php', 'admin/reports.php'];
+    if (!in_array(basename($path), array_map('basename', $allowed), true)) {
+        return $default;
+    }
+    return $back;
+}
+
+/**
  * 获取访客唯一标识
  * 基于session和cookie实现匿名用户标识
  */

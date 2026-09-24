@@ -59,12 +59,12 @@ function toggleFavorite(event, btn) {
                         card.style.transition = 'all 0.3s ease';
                         card.style.opacity = '0';
                         card.style.transform = 'translateX(-100px)';
-                        setTimeout(() => {
-                            card.remove();
-                            updateFavoritesStats();
-                            checkEmptyState();
-                        }, 300);
                     }
+                    setTimeout(() => {
+                        // 重新加载当前页（保留类型/页码等筛选条件），
+                        // 让列表、分页与统计摘要始终按同一口径刷新，避免残留旧项和错位
+                        window.location.reload();
+                    }, 300);
                 }
             }
         } else {
@@ -84,50 +84,6 @@ function toggleFavorite(event, btn) {
     .finally(() => {
         btn.disabled = false;
     });
-}
-
-/**
- * 更新收藏页面统计数据
- */
-function updateFavoritesStats() {
-    const statNumbers = document.querySelectorAll('.favorites-stats .stat-number');
-    statNumbers.forEach(el => {
-        const current = parseInt(el.textContent) || 0;
-        if (current > 0) {
-            el.textContent = current - 1;
-        }
-    });
-
-    const subtitle = document.querySelector('.page-subtitle');
-    if (subtitle) {
-        const match = subtitle.textContent.match(/\d+/);
-        if (match) {
-            const current = parseInt(match[0]) || 0;
-            subtitle.textContent = `共收藏 ${Math.max(0, current - 1)} 条留言`;
-        }
-    }
-}
-
-/**
- * 检查收藏页面是否为空
- */
-function checkEmptyState() {
-    const list = document.querySelector('.message-list');
-    if (!list) return;
-
-    const cards = list.querySelectorAll('.message-card');
-    if (cards.length === 0) {
-        const container = document.querySelector('.message-list-section .container');
-        if (container) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">⭐</div>
-                    <p>暂无收藏的留言</p>
-                    <a href="index.php" class="btn btn-primary">去浏览留言</a>
-                </div>
-            `;
-        }
-    }
 }
 
 /**

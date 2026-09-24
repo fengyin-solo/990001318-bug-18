@@ -10,25 +10,24 @@ $jsPath = '../assets/js/main.js';
 
 $db = getDB();
 
-$status = $_GET['status'] ?? '';
-$reportType = $_GET['report_type'] ?? '';
+$status = ($s = ($_GET['status'] ?? '')) !== '' && in_array($s, ['0', '1', '2', '3'], true) ? $s : '';
+$reportType = ($rt = ($_GET['report_type'] ?? '')) && in_array($rt, ['spam', 'abuse', 'illegal', 'porn', 'other'], true) ? $rt : '';
 $keyword = trim($_GET['keyword'] ?? '');
 $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 15;
-$offset = ($page - 1) * $pageSize;
 
 $where = "WHERE 1=1";
 $params = [];
 
-if ($status !== '' && in_array($status, ['0', '1', '2', '3'])) {
+if ($status !== '') {
     $where .= " AND r.status = ?";
     $params[] = intval($status);
 }
-if ($reportType && in_array($reportType, ['spam', 'abuse', 'illegal', 'porn', 'other'])) {
+if ($reportType) {
     $where .= " AND r.report_type = ?";
     $params[] = $reportType;
 }
-if ($keyword) {
+if ($keyword !== '') {
     $where .= " AND (m.title LIKE ? OR m.content LIKE ? OR r.description LIKE ?)";
     $kw = "%$keyword%";
     $params[] = $kw;
@@ -38,10 +37,18 @@ if ($keyword) {
 
 $countStmt = $db->prepare("SELECT COUNT(*) FROM reports r LEFT JOIN messages m ON r.message_id = m.id $where");
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
 
-$sql = "SELECT r.*, m.title as message_title, m.nickname as message_nickname, m.type as message_type, a.username as admin_name 
+// 页码越界：重定向到有效页并保留筛选条件
+$listParams = array_filter(['status' => $status, 'report_type' => $reportType, 'keyword' => $keyword], function ($v) {
+    return $v !== '' && $v !== null;
+});
+clampPageRedirect($page, $totalPages, $listParams, 'reports.php');
+$page = min($page, max(1, $totalPages));
+$offset = ($page - 1) * $pageSize;
+
+$sql = "SELECT r.*, m.title as message_title, m.nickname as message_nickname, m.type as message_type, a.username as admin_name
         FROM reports r 
         LEFT JOIN messages m ON r.message_id = m.id 
         LEFT JOIN admins a ON r.processed_by = a.id 

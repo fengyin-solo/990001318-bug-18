@@ -10,17 +10,16 @@ $jsPath = 'assets/js/main.js';
 $db = getDB();
 
 // 获取排序参数
-$sort = $_GET['sort'] ?? 'time';
-$type = $_GET['type'] ?? '';
+$sort = in_array($_GET['sort'] ?? '', ['time', 'hot'], true) ? $_GET['sort'] : 'time';
+$type = ($t = ($_GET['type'] ?? '')) && in_array($t, ['help', 'suggest', 'lost'], true) ? $t : '';
 $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
-$offset = ($page - 1) * $pageSize;
 
-// 构建查询
+// 列表筛选条件（统计与列表共用同一口径）
 $where = "WHERE status = 1";
 $params = [];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND type = ?";
     $params[] = $type;
 }
@@ -31,8 +30,14 @@ $orderBy = ($sort === 'hot') ? "views DESC, created_at DESC" : "created_at DESC"
 // 总数
 $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
+
+// 页码越界：重定向到有效页，同时保留筛选条件
+$listParams = array_filter(['sort' => $sort !== 'time' ? $sort : null, 'type' => $type]);
+clampPageRedirect($page, $totalPages, $listParams, 'index.php');
+$page = min($page, max(1, $totalPages));
+$offset = ($page - 1) * $pageSize;
 
 // 列表
 $sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT $pageSize OFFSET $offset";
@@ -44,18 +49,20 @@ $messages = $stmt->fetchAll();
 $favoritedIds = getFavoritedMessageIds();
 $favoritedIds = array_flip($favoritedIds);
 
-// 滚动数据（最新5条）
+// 滚动数据（最新8条）
 $scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 ORDER BY created_at DESC LIMIT 8");
 $scrollMessages = $scrollStmt->fetchAll();
 
-// 统计
-$statsStmt = $db->query("SELECT 
+// 统计（口径与当前列表筛选一致：选了类型就统计该类型，未选则统计全部）
+$statsStmt = $db->prepare("SELECT
     COUNT(*) as total,
     SUM(CASE WHEN type='help' THEN 1 ELSE 0 END) as help_count,
     SUM(CASE WHEN type='suggest' THEN 1 ELSE 0 END) as suggest_count,
     SUM(CASE WHEN type='lost' THEN 1 ELSE 0 END) as lost_count
-    FROM messages WHERE status = 1");
+    FROM messages $where");
+$statsStmt->execute($params);
 $stats = $statsStmt->fetch();
+$stats['total'] = $total;
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -83,19 +90,19 @@ include __DIR__ . '/includes/header.php';
     <div class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-number"><?= $stats['total'] ?? 0 ?></div>
+                <div class="stat-number"><?= $total ?></div>
                 <div class="stat-label">全部留言</div>
             </div>
             <div class="stat-card stat-help">
-                <div class="stat-number"><?= $stats['help_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['help_count'] ?? 0) ?></div>
                 <div class="stat-label">🆘 居民求助</div>
             </div>
             <div class="stat-card stat-suggest">
-                <div class="stat-number"><?= $stats['suggest_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['suggest_count'] ?? 0) ?></div>
                 <div class="stat-label">💡 意见建议</div>
             </div>
             <div class="stat-card stat-lost">
-                <div class="stat-number"><?= $stats['lost_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['lost_count'] ?? 0) ?></div>
                 <div class="stat-label">🔍 失物招领</div>
             </div>
         </div>
@@ -107,14 +114,14 @@ include __DIR__ . '/includes/header.php';
     <div class="container">
         <div class="filter-bar">
             <div class="filter-types">
-                <a href="index.php?sort=<?= $sort ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
-                <a href="index.php?sort=<?= $sort ?>&type=help" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
-                <a href="index.php?sort=<?= $sort ?>&type=suggest" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
-                <a href="index.php?sort=<?= $sort ?>&type=lost" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
+                <a href="index.php<?= buildListQuery(array_filter(['sort' => $sort !== 'time' ? $sort : null])) ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
+                <a href="index.php<?= buildListQuery(array_merge($listParams, ['type' => 'help'])) ?>" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
+                <a href="index.php<?= buildListQuery(array_merge($listParams, ['type' => 'suggest'])) ?>" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
+                <a href="index.php<?= buildListQuery(array_merge($listParams, ['type' => 'lost'])) ?>" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
             </div>
             <div class="filter-sort">
-                <a href="index.php?sort=time&type=<?= $type ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
-                <a href="index.php?sort=hot&type=<?= $type ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
+                <a href="index.php<?= buildListQuery(array_filter(['type' => $type, 'sort' => 'time'])) ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
+                <a href="index.php<?= buildListQuery(array_filter(['type' => $type, 'sort' => 'hot'])) ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
             </div>
         </div>
     </div>
@@ -133,7 +140,7 @@ include __DIR__ . '/includes/header.php';
         <div class="message-list">
             <?php foreach ($messages as $msg): ?>
             <div class="message-card">
-                <a href="detail.php?id=<?= $msg['id'] ?>" class="card-link">
+                <a href="<?= buildDetailBackUrl($msg['id'], $page > 1 ? array_merge($listParams, ['page' => $page]) : $listParams) ?>" class="card-link">
                     <div class="card-header">
                         <span class="card-type type-<?= $msg['type'] ?>"><?= getTypeIcon($msg['type']) ?> <?= getTypeLabel($msg['type']) ?></span>
                         <span class="card-time"><?= timeAgo($msg['created_at']) ?></span>
@@ -160,14 +167,15 @@ include __DIR__ . '/includes/header.php';
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="index.php?page=<?= $page - 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">上一页</a>
+            <a href="index.php<?= buildListQuery($listParams, ['page' => $page - 1]) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="index.php?page=<?= $i ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="index.php<?= buildListQuery($listParams, ['page' => $i]) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="index.php?page=<?= $page + 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">下一页</a>
+            <a href="index.php<?= buildListQuery($listParams, ['page' => $page + 1]) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
+            <span class="page-info">共 <?= $total ?> 条</span>
         </div>
         <?php endif; ?>
         <?php endif; ?>

@@ -10,15 +10,14 @@ $jsPath = 'assets/js/main.js';
 $db = getDB();
 $visitorId = getVisitorId();
 
-$type = $_GET['type'] ?? '';
+$type = ($t = ($_GET['type'] ?? '')) && in_array($t, ['help', 'suggest', 'lost'], true) ? $t : '';
 $page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 10;
-$offset = ($page - 1) * $pageSize;
 
 $where = "WHERE f.visitor_id = ? AND m.status = 1";
 $params = [$visitorId];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND m.type = ?";
     $params[] = $type;
 }
@@ -26,14 +25,20 @@ if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
 $countSql = "SELECT COUNT(*) FROM favorites f INNER JOIN messages m ON f.message_id = m.id $where";
 $countStmt = $db->prepare($countSql);
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
 
-$sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at 
-        FROM favorites f 
-        INNER JOIN messages m ON f.message_id = m.id 
-        $where 
-        ORDER BY f.created_at DESC 
+// 页码越界：重定向到有效页并保留筛选条件
+$listParams = array_filter(['type' => $type]);
+clampPageRedirect($page, $totalPages, $listParams, 'favorites.php');
+$page = min($page, max(1, $totalPages));
+$offset = ($page - 1) * $pageSize;
+
+$sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at
+        FROM favorites f
+        INNER JOIN messages m ON f.message_id = m.id
+        $where
+        ORDER BY f.created_at DESC
         LIMIT $pageSize OFFSET $offset";
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
@@ -42,15 +47,17 @@ $favorites = $stmt->fetchAll();
 $favoritedIds = getFavoritedMessageIds();
 $favoritedIds = array_flip($favoritedIds);
 
-$statsStmt = $db->prepare("SELECT 
+// 统计（与当前列表同一筛选口径）
+$statsStmt = $db->prepare("SELECT
     COUNT(*) as total,
     SUM(CASE WHEN m.type='help' THEN 1 ELSE 0 END) as help_count,
     SUM(CASE WHEN m.type='suggest' THEN 1 ELSE 0 END) as suggest_count,
     SUM(CASE WHEN m.type='lost' THEN 1 ELSE 0 END) as lost_count
-    FROM favorites f INNER JOIN messages m ON f.message_id = m.id 
-    WHERE f.visitor_id = ? AND m.status = 1");
-$statsStmt->execute([$visitorId]);
+    FROM favorites f INNER JOIN messages m ON f.message_id = m.id
+    $where");
+$statsStmt->execute($params);
 $stats = $statsStmt->fetch();
+$stats['total'] = $total;
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -59,24 +66,24 @@ include __DIR__ . '/includes/header.php';
     <div class="container">
         <div class="page-header">
             <h1 class="page-title">⭐ 我的收藏</h1>
-            <p class="page-subtitle">共收藏 <?= $stats['total'] ?? 0 ?> 条留言</p>
+            <p class="page-subtitle">共收藏 <?= $total ?> 条留言<?= $type ? '（' . getTypeLabel($type) . '）' : '' ?></p>
         </div>
 
         <div class="favorites-stats">
             <div class="stat-card">
-                <div class="stat-number"><?= $stats['total'] ?? 0 ?></div>
+                <div class="stat-number"><?= $total ?></div>
                 <div class="stat-label">全部收藏</div>
             </div>
             <div class="stat-card stat-help">
-                <div class="stat-number"><?= $stats['help_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['help_count'] ?? 0) ?></div>
                 <div class="stat-label">🆘 求助</div>
             </div>
             <div class="stat-card stat-suggest">
-                <div class="stat-number"><?= $stats['suggest_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['suggest_count'] ?? 0) ?></div>
                 <div class="stat-label">💡 建议</div>
             </div>
             <div class="stat-card stat-lost">
-                <div class="stat-number"><?= $stats['lost_count'] ?? 0 ?></div>
+                <div class="stat-number"><?= (int)($stats['lost_count'] ?? 0) ?></div>
                 <div class="stat-label">🔍 失物</div>
             </div>
         </div>
@@ -104,7 +111,7 @@ include __DIR__ . '/includes/header.php';
         <div class="message-list">
             <?php foreach ($favorites as $msg): ?>
             <div class="message-card">
-                <a href="detail.php?id=<?= $msg['id'] ?>" class="card-link">
+                <a href="<?= buildDetailBackUrl($msg['id'], $page > 1 ? array_merge($listParams, ['page' => $page]) : $listParams, 'favorites.php') ?>" class="card-link">
                     <div class="card-header">
                         <span class="card-type type-<?= $msg['type'] ?>"><?= getTypeIcon($msg['type']) ?> <?= getTypeLabel($msg['type']) ?></span>
                         <span class="card-time">收藏于 <?= timeAgo($msg['favorited_at']) ?></span>
@@ -130,14 +137,15 @@ include __DIR__ . '/includes/header.php';
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="favorites.php?page=<?= $page - 1 ?>&type=<?= $type ?>" class="page-btn">上一页</a>
+            <a href="favorites.php<?= buildListQuery($listParams, ['page' => $page - 1]) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="favorites.php?page=<?= $i ?>&type=<?= $type ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="favorites.php<?= buildListQuery($listParams, ['page' => $i]) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="favorites.php?page=<?= $page + 1 ?>&type=<?= $type ?>" class="page-btn">下一页</a>
+            <a href="favorites.php<?= buildListQuery($listParams, ['page' => $page + 1]) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
+            <span class="page-info">共 <?= $total ?> 条</span>
         </div>
         <?php endif; ?>
         <?php endif; ?>

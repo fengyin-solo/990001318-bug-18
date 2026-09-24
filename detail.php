@@ -3,15 +3,16 @@ require_once __DIR__ . '/includes/functions.php';
 require_once __DIR__ . '/config/database.php';
 
 $id = intval($_GET['id'] ?? 0);
+
+// 返回列表时恢复之前的筛选/分页条件
+$backUrl = resolveDetailBackUrl('index.php');
+
 if ($id <= 0) {
-    header('Location: index.php');
+    header('Location: ' . $backUrl, true, 302);
     exit;
 }
 
 $db = getDB();
-
-// 增加浏览量
-$db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
 
 // 获取详情
 $stmt = $db->prepare("SELECT * FROM messages WHERE id = ? AND status = 1");
@@ -19,9 +20,12 @@ $stmt->execute([$id]);
 $msg = $stmt->fetch();
 
 if (!$msg) {
-    header('Location: index.php');
+    header('Location: ' . $backUrl, true, 302);
     exit;
 }
+
+// 增加浏览量
+$db->prepare("UPDATE messages SET views = views + 1 WHERE id = ?")->execute([$id]);
 
 $pageTitle = cleanInput($msg['title']) . ' - 社区便民留言板';
 $currentPage = '';
@@ -62,7 +66,7 @@ include __DIR__ . '/includes/header.php';
             <?php endif; ?>
 
             <div class="detail-actions">
-                <a href="index.php" class="btn btn-secondary">← 返回列表</a>
+                <a href="<?= cleanInput($backUrl) ?>" class="btn btn-secondary">← 返回列表</a>
                 <?php $isFav = isFavorited($msg['id']); ?>
                 <button class="btn favorite-detail-btn <?= $isFav ? 'btn-warning' : 'btn-secondary' ?>" data-message-id="<?= $msg['id'] ?>" onclick="toggleFavorite(event, this)">
                     <span class="favorite-icon"><?= $isFav ? '⭐' : '☆' ?></span>
