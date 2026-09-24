@@ -10,15 +10,28 @@ $jsPath = 'assets/js/main.js';
 $db = getDB();
 $visitorId = getVisitorId();
 
+$validTypes = ['help', 'suggest', 'lost'];
+
 $type = $_GET['type'] ?? '';
-$page = max(1, intval($_GET['page'] ?? 1));
+$needRedirect = false;
+if ($type !== '' && !in_array($type, $validTypes, true)) {
+    $type = '';
+    $needRedirect = true;
+}
+
+// 页码校验：非正整数规范化
+$rawPage = $_GET['page'] ?? null;
+$page = ($rawPage !== null && $rawPage !== '') ? intval($rawPage) : 1;
+if ($rawPage !== null && $rawPage !== '' && (!ctype_digit((string)$rawPage) || $page < 1)) {
+    $page = 1;
+    $needRedirect = true;
+}
 $pageSize = 10;
-$offset = ($page - 1) * $pageSize;
 
 $where = "WHERE f.visitor_id = ? AND m.status = 1";
 $params = [$visitorId];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND m.type = ?";
     $params[] = $type;
 }
@@ -26,17 +39,31 @@ if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
 $countSql = "SELECT COUNT(*) FROM favorites f INNER JOIN messages m ON f.message_id = m.id $where";
 $countStmt = $db->prepare($countSql);
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
 
-$sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at 
-        FROM favorites f 
-        INNER JOIN messages m ON f.message_id = m.id 
-        $where 
-        ORDER BY f.created_at DESC 
-        LIMIT $pageSize OFFSET $offset";
+// 页码越界：有数据时重定向到最后一页，无数据时回到第1页
+$targetPage = min($page, max(1, $totalPages));
+if ($targetPage !== $page) {
+    $needRedirect = true;
+    $page = $targetPage;
+}
+if ($needRedirect) {
+    redirectTo('favorites.php' . buildQueryString(['type' => $type ?: null, 'page' => $page > 1 ? $page : null]));
+}
+$offset = ($page - 1) * $pageSize;
+
+$sql = "SELECT m.id, m.nickname, m.type, m.title, m.content, m.image, m.views, m.created_at, f.created_at as favorited_at
+        FROM favorites f
+        INNER JOIN messages m ON f.message_id = m.id
+        $where
+        ORDER BY f.created_at DESC
+        LIMIT ? OFFSET ?";
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$listParams = $params;
+$listParams[] = $pageSize;
+$listParams[] = $offset;
+$stmt->execute($listParams);
 $favorites = $stmt->fetchAll();
 
 $favoritedIds = getFavoritedMessageIds();
@@ -63,20 +90,20 @@ include __DIR__ . '/includes/header.php';
         </div>
 
         <div class="favorites-stats">
-            <div class="stat-card">
-                <div class="stat-number"><?= $stats['total'] ?? 0 ?></div>
+            <div class="stat-card" data-type="total">
+                <div class="stat-number" data-count="total"><?= $stats['total'] ?? 0 ?></div>
                 <div class="stat-label">全部收藏</div>
             </div>
-            <div class="stat-card stat-help">
-                <div class="stat-number"><?= $stats['help_count'] ?? 0 ?></div>
+            <div class="stat-card stat-help" data-type="help">
+                <div class="stat-number" data-count="help"><?= $stats['help_count'] ?? 0 ?></div>
                 <div class="stat-label">🆘 求助</div>
             </div>
-            <div class="stat-card stat-suggest">
-                <div class="stat-number"><?= $stats['suggest_count'] ?? 0 ?></div>
+            <div class="stat-card stat-suggest" data-type="suggest">
+                <div class="stat-number" data-count="suggest"><?= $stats['suggest_count'] ?? 0 ?></div>
                 <div class="stat-label">💡 建议</div>
             </div>
-            <div class="stat-card stat-lost">
-                <div class="stat-number"><?= $stats['lost_count'] ?? 0 ?></div>
+            <div class="stat-card stat-lost" data-type="lost">
+                <div class="stat-number" data-count="lost"><?= $stats['lost_count'] ?? 0 ?></div>
                 <div class="stat-label">🔍 失物</div>
             </div>
         </div>
@@ -84,9 +111,9 @@ include __DIR__ . '/includes/header.php';
         <div class="filter-section">
             <div class="filter-types">
                 <a href="favorites.php" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
-                <a href="favorites.php?type=help" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
-                <a href="favorites.php?type=suggest" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
-                <a href="favorites.php?type=lost" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
+                <a href="favorites.php<?= buildQueryString(['type' => 'help']) ?>" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
+                <a href="favorites.php<?= buildQueryString(['type' => 'suggest']) ?>" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
+                <a href="favorites.php<?= buildQueryString(['type' => 'lost']) ?>" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
             </div>
         </div>
     </div>
@@ -101,10 +128,11 @@ include __DIR__ . '/includes/header.php';
             <a href="index.php" class="btn btn-primary">去浏览留言</a>
         </div>
         <?php else: ?>
+        <p class="list-summary">共收藏 <strong><?= $total ?></strong> 条符合条件的留言</p>
         <div class="message-list">
             <?php foreach ($favorites as $msg): ?>
-            <div class="message-card">
-                <a href="detail.php?id=<?= $msg['id'] ?>" class="card-link">
+            <div class="message-card" data-type="<?= $msg['type'] ?>">
+                <a href="detail.php<?= buildQueryString(['id' => $msg['id'], 'from' => 'favorites', 'type' => $type ?: null, 'page' => $page > 1 ? $page : null]) ?>" class="card-link">
                     <div class="card-header">
                         <span class="card-type type-<?= $msg['type'] ?>"><?= getTypeIcon($msg['type']) ?> <?= getTypeLabel($msg['type']) ?></span>
                         <span class="card-time">收藏于 <?= timeAgo($msg['favorited_at']) ?></span>
@@ -119,7 +147,7 @@ include __DIR__ . '/includes/header.php';
                         <span class="card-views">👁 <?= $msg['views'] ?></span>
                     </div>
                 </a>
-                <button class="favorite-btn favorited" data-message-id="<?= $msg['id'] ?>" onclick="toggleFavorite(event, this)">
+                <button class="favorite-btn favorited" data-message-id="<?= $msg['id'] ?>" data-type="<?= $msg['type'] ?>" onclick="toggleFavorite(event, this)">
                     <span class="favorite-icon">⭐</span>
                     <span class="favorite-text">已收藏</span>
                 </button>
@@ -130,14 +158,15 @@ include __DIR__ . '/includes/header.php';
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="favorites.php?page=<?= $page - 1 ?>&type=<?= $type ?>" class="page-btn">上一页</a>
+            <a href="favorites.php<?= buildQueryString(['page' => $page - 1, 'type' => $type ?: null]) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="favorites.php?page=<?= $i ?>&type=<?= $type ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="favorites.php<?= buildQueryString(['page' => $i, 'type' => $type ?: null]) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="favorites.php?page=<?= $page + 1 ?>&type=<?= $type ?>" class="page-btn">下一页</a>
+            <a href="favorites.php<?= buildQueryString(['page' => $page + 1, 'type' => $type ?: null]) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
+            <span class="page-info">共 <?= $total ?> 条 / 第 <?= $page ?>/<?= $totalPages ?> 页</span>
         </div>
         <?php endif; ?>
         <?php endif; ?>

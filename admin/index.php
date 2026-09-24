@@ -14,18 +14,34 @@ $db = getDB();
 $status = $_GET['status'] ?? '';
 $type = $_GET['type'] ?? '';
 $keyword = trim($_GET['keyword'] ?? '');
-$page = max(1, intval($_GET['page'] ?? 1));
 $pageSize = 15;
-$offset = ($page - 1) * $pageSize;
+
+$needRedirect = false;
+if ($status !== '' && !in_array($status, ['0', '1', '2'], true)) {
+    $status = '';
+    $needRedirect = true;
+}
+if ($type !== '' && !in_array($type, ['help', 'suggest', 'lost'], true)) {
+    $type = '';
+    $needRedirect = true;
+}
+
+// 页码校验
+$rawPage = $_GET['page'] ?? null;
+$page = ($rawPage !== null && $rawPage !== '') ? intval($rawPage) : 1;
+if ($rawPage !== null && $rawPage !== '' && (!ctype_digit((string)$rawPage) || $page < 1)) {
+    $page = 1;
+    $needRedirect = true;
+}
 
 $where = "WHERE 1=1";
 $params = [];
 
-if ($status !== '' && in_array($status, ['0', '1', '2'])) {
+if ($status !== '') {
     $where .= " AND status = ?";
     $params[] = intval($status);
 }
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND type = ?";
     $params[] = $type;
 }
@@ -39,12 +55,31 @@ if ($keyword) {
 
 $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
 
-$sql = "SELECT * FROM messages $where ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset";
+// 页码越界：有数据时回到最后一页，无数据时回到第1页
+$targetPage = min($page, max(1, $totalPages));
+if ($targetPage !== $page) {
+    $needRedirect = true;
+    $page = $targetPage;
+}
+if ($needRedirect) {
+    redirectTo('index.php' . buildQueryString([
+        'page' => $page > 1 ? $page : null,
+        'status' => $status !== '' ? $status : null,
+        'type' => $type ?: null,
+        'keyword' => $keyword ?: null,
+    ]));
+}
+$offset = ($page - 1) * $pageSize;
+
+$sql = "SELECT * FROM messages $where ORDER BY created_at DESC LIMIT ? OFFSET ?";
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$listParams = $params;
+$listParams[] = $pageSize;
+$listParams[] = $offset;
+$stmt->execute($listParams);
 $messages = $stmt->fetchAll();
 
 // 统计
@@ -142,18 +177,28 @@ include __DIR__ . '/header.php';
         </div>
 
         <!-- 分页 -->
+        <?php
+        $adminPageQuery = function($p) use ($status, $type, $keyword) {
+            return buildQueryString([
+                'page' => $p > 1 ? $p : null,
+                'status' => $status !== '' ? $status : null,
+                'type' => $type ?: null,
+                'keyword' => $keyword ?: null,
+            ]);
+        };
+        ?>
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="index.php?page=<?= $page - 1 ?>&status=<?= $status ?>&type=<?= $type ?>&keyword=<?= urlencode($keyword) ?>" class="page-btn">上一页</a>
+            <a href="index.php<?= $adminPageQuery($page - 1) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="index.php?page=<?= $i ?>&status=<?= $status ?>&type=<?= $type ?>&keyword=<?= urlencode($keyword) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="index.php<?= $adminPageQuery($i) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="index.php?page=<?= $page + 1 ?>&status=<?= $status ?>&type=<?= $type ?>&keyword=<?= urlencode($keyword) ?>" class="page-btn">下一页</a>
+            <a href="index.php<?= $adminPageQuery($page + 1) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
-            <span class="page-info">共 <?= $total ?> 条</span>
+            <span class="page-info">共 <?= $total ?> 条 / 第 <?= $page ?>/<?= $totalPages ?> 页</span>
         </div>
         <?php endif; ?>
     </div>

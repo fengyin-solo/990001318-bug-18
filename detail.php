@@ -23,6 +23,17 @@ if (!$msg) {
     exit;
 }
 
+// 根据来源页构建返回链接，保留已选分类、排序、页码等条件
+$validTypes = ['help', 'suggest', 'lost'];
+$backType = (isset($_GET['type']) && in_array($_GET['type'], $validTypes, true)) ? $_GET['type'] : '';
+$backPage = (isset($_GET['page']) && ctype_digit((string)$_GET['page']) && (int)$_GET['page'] > 1) ? (int)$_GET['page'] : null;
+if (($_GET['from'] ?? '') === 'favorites') {
+    $backUrl = 'favorites.php' . buildQueryString(['type' => $backType ?: null, 'page' => $backPage]);
+} else {
+    $backSort = (($_GET['sort'] ?? '') === 'hot') ? 'hot' : null;
+    $backUrl = 'index.php' . buildQueryString(['sort' => $backSort, 'type' => $backType ?: null, 'page' => $backPage]);
+}
+
 $pageTitle = cleanInput($msg['title']) . ' - 社区便民留言板';
 $currentPage = '';
 $cssPath = 'assets/css/style.css';
@@ -62,9 +73,9 @@ include __DIR__ . '/includes/header.php';
             <?php endif; ?>
 
             <div class="detail-actions">
-                <a href="index.php" class="btn btn-secondary">← 返回列表</a>
+                <a href="<?= htmlspecialchars($backUrl, ENT_QUOTES) ?>" class="btn btn-secondary">← 返回列表</a>
                 <?php $isFav = isFavorited($msg['id']); ?>
-                <button class="btn favorite-detail-btn <?= $isFav ? 'btn-warning' : 'btn-secondary' ?>" data-message-id="<?= $msg['id'] ?>" onclick="toggleFavorite(event, this)">
+                <button class="btn favorite-detail-btn <?= $isFav ? 'btn-warning' : 'btn-secondary' ?>" data-message-id="<?= $msg['id'] ?>" data-type="<?= $msg['type'] ?>" onclick="toggleFavorite(event, this)">
                     <span class="favorite-icon"><?= $isFav ? '⭐' : '☆' ?></span>
                     <span class="favorite-text"><?= $isFav ? '已收藏' : '收藏' ?></span>
                 </button>

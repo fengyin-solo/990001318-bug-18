@@ -78,6 +78,26 @@ function cleanInput($str) {
 }
 
 /**
+ * 根据参数数组构建查询字符串（自动跳过空值并做URL编码）
+ */
+function buildQueryString(array $params) {
+    $parts = [];
+    foreach ($params as $key => $value) {
+        if ($value === null || $value === '') continue;
+        $parts[] = urlencode($key) . '=' . urlencode($value);
+    }
+    return $parts ? '?' . implode('&', $parts) : '';
+}
+
+/**
+ * 重定向到规范URL（保留/修正筛选条件与页码）
+ */
+function redirectTo($url) {
+    header('Location: ' . $url);
+    exit;
+}
+
+/**
  * 获取访客唯一标识
  * 基于session和cookie实现匿名用户标识
  */

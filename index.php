@@ -9,18 +9,41 @@ $jsPath = 'assets/js/main.js';
 
 $db = getDB();
 
-// 获取排序参数
+// 合法的排序与分类
+$validSorts = ['time', 'hot'];
+$validTypes = ['help', 'suggest', 'lost'];
+
+// 获取并校验筛选参数；非法参数一律规范化后重定向，避免静默失效
 $sort = $_GET['sort'] ?? 'time';
 $type = $_GET['type'] ?? '';
-$page = max(1, intval($_GET['page'] ?? 1));
+$canonical = ['sort' => null, 'type' => null, 'page' => null];
+$needRedirect = false;
+
+if (!in_array($sort, $validSorts, true)) {
+    $sort = 'time';
+    $needRedirect = true;
+}
+if ($type !== '' && !in_array($type, $validTypes, true)) {
+    $type = '';
+    $needRedirect = true;
+}
+$canonical['sort'] = $sort === 'time' ? null : $sort;
+$canonical['type'] = $type ?: null;
+
+// 页码：非正整数视为非法
+$rawPage = $_GET['page'] ?? null;
+$page = ($rawPage !== null && $rawPage !== '') ? intval($rawPage) : 1;
+if ($rawPage !== null && $rawPage !== '' && (!ctype_digit((string)$rawPage) || $page < 1)) {
+    $page = 1;
+    $needRedirect = true;
+}
 $pageSize = 10;
-$offset = ($page - 1) * $pageSize;
 
 // 构建查询
 $where = "WHERE status = 1";
 $params = [];
 
-if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
+if ($type) {
     $where .= " AND type = ?";
     $params[] = $type;
 }
@@ -28,23 +51,38 @@ if ($type && in_array($type, ['help', 'suggest', 'lost'])) {
 // 排序
 $orderBy = ($sort === 'hot') ? "views DESC, created_at DESC" : "created_at DESC";
 
-// 总数
+// 总数（与列表查询同一筛选口径）
 $countStmt = $db->prepare("SELECT COUNT(*) FROM messages $where");
 $countStmt->execute($params);
-$total = $countStmt->fetchColumn();
-$totalPages = ceil($total / $pageSize);
+$total = (int)$countStmt->fetchColumn();
+$totalPages = (int)ceil($total / $pageSize);
 
-// 列表
-$sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT $pageSize OFFSET $offset";
+// 页码越界：有数据时重定向到最后一页；无数据时回到第1页
+$targetPage = min($page, max(1, $totalPages));
+if ($targetPage !== $page) {
+    $needRedirect = true;
+}
+if ($needRedirect) {
+    $canonical['page'] = $targetPage > 1 ? $targetPage : null;
+    redirectTo('index.php' . buildQueryString($canonical));
+}
+$page = $targetPage;
+$offset = ($page - 1) * $pageSize;
+
+// 列表（分页参数同样使用绑定，避免拼接风险）
+$sql = "SELECT id, nickname, type, title, content, image, views, created_at FROM messages $where ORDER BY $orderBy LIMIT ? OFFSET ?";
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
+$listParams = $params;
+$listParams[] = $pageSize;
+$listParams[] = $offset;
+$stmt->execute($listParams);
 $messages = $stmt->fetchAll();
 
 // 获取当前用户已收藏的留言ID
 $favoritedIds = getFavoritedMessageIds();
 $favoritedIds = array_flip($favoritedIds);
 
-// 滚动数据（最新5条）
+// 滚动数据（最新8条）
 $scrollStmt = $db->query("SELECT id, type, title, created_at FROM messages WHERE status = 1 ORDER BY created_at DESC LIMIT 8");
 $scrollMessages = $scrollStmt->fetchAll();
 
@@ -107,14 +145,14 @@ include __DIR__ . '/includes/header.php';
     <div class="container">
         <div class="filter-bar">
             <div class="filter-types">
-                <a href="index.php?sort=<?= $sort ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
-                <a href="index.php?sort=<?= $sort ?>&type=help" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
-                <a href="index.php?sort=<?= $sort ?>&type=suggest" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
-                <a href="index.php?sort=<?= $sort ?>&type=lost" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
+                <a href="index.php<?= buildQueryString(['sort' => $sort === 'time' ? null : $sort]) ?>" class="filter-tag <?= !$type ? 'active' : '' ?>">全部</a>
+                <a href="index.php<?= buildQueryString(['sort' => $sort === 'time' ? null : $sort, 'type' => 'help']) ?>" class="filter-tag <?= $type === 'help' ? 'active' : '' ?>">🆘 求助</a>
+                <a href="index.php<?= buildQueryString(['sort' => $sort === 'time' ? null : $sort, 'type' => 'suggest']) ?>" class="filter-tag <?= $type === 'suggest' ? 'active' : '' ?>">💡 建议</a>
+                <a href="index.php<?= buildQueryString(['sort' => $sort === 'time' ? null : $sort, 'type' => 'lost']) ?>" class="filter-tag <?= $type === 'lost' ? 'active' : '' ?>">🔍 失物招领</a>
             </div>
             <div class="filter-sort">
-                <a href="index.php?sort=time&type=<?= $type ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
-                <a href="index.php?sort=hot&type=<?= $type ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
+                <a href="index.php<?= buildQueryString(['type' => $type ?: null]) ?>" class="sort-btn <?= $sort === 'time' ? 'active' : '' ?>">🕐 按时间</a>
+                <a href="index.php<?= buildQueryString(['sort' => 'hot', 'type' => $type ?: null]) ?>" class="sort-btn <?= $sort === 'hot' ? 'active' : '' ?>">🔥 按热度</a>
             </div>
         </div>
     </div>
@@ -130,10 +168,11 @@ include __DIR__ . '/includes/header.php';
             <a href="submit.php" class="btn btn-primary">发布第一条留言</a>
         </div>
         <?php else: ?>
+        <p class="list-summary">共找到 <strong><?= $total ?></strong> 条符合条件的留言</p>
         <div class="message-list">
             <?php foreach ($messages as $msg): ?>
             <div class="message-card">
-                <a href="detail.php?id=<?= $msg['id'] ?>" class="card-link">
+                <a href="detail.php<?= buildQueryString(['id' => $msg['id'], 'from' => 'index', 'sort' => $sort === 'time' ? null : $sort, 'type' => $type ?: null, 'page' => $page > 1 ? $page : null]) ?>" class="card-link">
                     <div class="card-header">
                         <span class="card-type type-<?= $msg['type'] ?>"><?= getTypeIcon($msg['type']) ?> <?= getTypeLabel($msg['type']) ?></span>
                         <span class="card-time"><?= timeAgo($msg['created_at']) ?></span>
@@ -148,7 +187,7 @@ include __DIR__ . '/includes/header.php';
                         <span class="card-views">👁 <?= $msg['views'] ?></span>
                     </div>
                 </a>
-                <button class="favorite-btn <?= isset($favoritedIds[$msg['id']]) ? 'favorited' : '' ?>" data-message-id="<?= $msg['id'] ?>" onclick="toggleFavorite(event, this)">
+                <button class="favorite-btn <?= isset($favoritedIds[$msg['id']]) ? 'favorited' : '' ?>" data-message-id="<?= $msg['id'] ?>" data-type="<?= $msg['type'] ?>" onclick="toggleFavorite(event, this)">
                     <span class="favorite-icon"><?= isset($favoritedIds[$msg['id']]) ? '⭐' : '☆' ?></span>
                     <span class="favorite-text"><?= isset($favoritedIds[$msg['id']]) ? '已收藏' : '收藏' ?></span>
                 </button>
@@ -160,14 +199,15 @@ include __DIR__ . '/includes/header.php';
         <?php if ($totalPages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-            <a href="index.php?page=<?= $page - 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">上一页</a>
+            <a href="index.php<?= buildQueryString(['page' => $page - 1, 'sort' => $sort === 'time' ? null : $sort, 'type' => $type ?: null]) ?>" class="page-btn">上一页</a>
             <?php endif; ?>
             <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <a href="index.php?page=<?= $i ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
+            <a href="index.php<?= buildQueryString(['page' => $i, 'sort' => $sort === 'time' ? null : $sort, 'type' => $type ?: null]) ?>" class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
             <?php endfor; ?>
             <?php if ($page < $totalPages): ?>
-            <a href="index.php?page=<?= $page + 1 ?>&sort=<?= $sort ?>&type=<?= $type ?>" class="page-btn">下一页</a>
+            <a href="index.php<?= buildQueryString(['page' => $page + 1, 'sort' => $sort === 'time' ? null : $sort, 'type' => $type ?: null]) ?>" class="page-btn">下一页</a>
             <?php endif; ?>
+            <span class="page-info">共 <?= $total ?> 条 / 第 <?= $page ?>/<?= $totalPages ?> 页</span>
         </div>
         <?php endif; ?>
         <?php endif; ?>

@@ -1,11 +1,25 @@
 /**
  * 社区便民留言板 - 前端脚本
  */
-document.addEventListener('DOMContentLoaded', function() {
-    // 滚动信息复制实现无缝滚动
+/**
+ * 复制一份滚动内容以实现无缝滚动。
+ * 用标记防止重复执行；bfcache 往返恢复时也不会再次追加，
+ * 避免同一条留言被重复显示、旧项残留。
+ */
+function initScrollContent() {
     const scrollContent = document.getElementById('scrollContent');
-    if (scrollContent) {
-        scrollContent.innerHTML += scrollContent.innerHTML;
+    if (!scrollContent || scrollContent.dataset.cloned === '1') return;
+    scrollContent.dataset.cloned = '1';
+    scrollContent.innerHTML += scrollContent.innerHTML;
+}
+
+document.addEventListener('DOMContentLoaded', initScrollContent);
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted) {
+        const scrollContent = document.getElementById('scrollContent');
+        if (scrollContent && scrollContent.dataset.cloned !== '1') {
+            initScrollContent();
+        }
     }
 });
 
@@ -56,12 +70,13 @@ function toggleFavorite(event, btn) {
                 if (window.location.pathname.includes('favorites.php')) {
                     const card = btn.closest('.message-card');
                     if (card) {
+                        const messageType = btn.dataset.type || card.dataset.type || '';
                         card.style.transition = 'all 0.3s ease';
                         card.style.opacity = '0';
                         card.style.transform = 'translateX(-100px)';
                         setTimeout(() => {
                             card.remove();
-                            updateFavoritesStats();
+                            updateFavoritesStats(messageType);
                             checkEmptyState();
                         }, 300);
                     }
@@ -88,15 +103,20 @@ function toggleFavorite(event, btn) {
 
 /**
  * 更新收藏页面统计数据
+ * 仅递减"全部收藏"总数与被取消留言所属分类的数量，保证摘要与总数同一口径
  */
-function updateFavoritesStats() {
-    const statNumbers = document.querySelectorAll('.favorites-stats .stat-number');
-    statNumbers.forEach(el => {
+function updateFavoritesStats(messageType) {
+    const decrement = function(selector) {
+        const el = document.querySelector(selector);
+        if (!el) return;
         const current = parseInt(el.textContent) || 0;
-        if (current > 0) {
-            el.textContent = current - 1;
-        }
-    });
+        el.textContent = Math.max(0, current - 1);
+    };
+
+    decrement('.favorites-stats [data-count="total"]');
+    if (messageType) {
+        decrement('.favorites-stats [data-count="' + messageType + '"]');
+    }
 
     const subtitle = document.querySelector('.page-subtitle');
     if (subtitle) {
@@ -110,24 +130,37 @@ function updateFavoritesStats() {
 
 /**
  * 检查收藏页面是否为空
+ * 当前页删光时：若不在第1页则回退页码重新加载（服务端会再次纠正越界页）；
+ * 在第1页时只替换列表区域，避免误删分页等兄弟节点造成错位
  */
 function checkEmptyState() {
     const list = document.querySelector('.message-list');
     if (!list) return;
 
     const cards = list.querySelectorAll('.message-card');
-    if (cards.length === 0) {
-        const container = document.querySelector('.message-list-section .container');
-        if (container) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">⭐</div>
-                    <p>暂无收藏的留言</p>
-                    <a href="index.php" class="btn btn-primary">去浏览留言</a>
-                </div>
-            `;
-        }
+    if (cards.length !== 0) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const currentPage = parseInt(params.get('page')) || 1;
+    if (currentPage > 1) {
+        params.set('page', String(currentPage - 1));
+        window.location.search = params.toString();
+        return;
     }
+
+    const section = document.querySelector('.message-list-section .container');
+    if (!section) return;
+    const pagination = section.querySelector('.pagination');
+    if (pagination) pagination.remove();
+    const summary = section.querySelector('.list-summary');
+    if (summary) summary.remove();
+    list.outerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">⭐</div>
+            <p>暂无收藏的留言</p>
+            <a href="index.php" class="btn btn-primary">去浏览留言</a>
+        </div>
+    `;
 }
 
 /**
